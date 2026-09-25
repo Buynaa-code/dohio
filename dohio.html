@@ -172,6 +172,7 @@
   <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
   <label class="chk"><input type="checkbox" id="skel" checked> Гарын зураас</label>
   <label class="chk"><input type="checkbox" id="builtin" checked> Бэлэн дохио</label>
+  <label class="chk"><input type="checkbox" id="zap" checked> ⚡ Цахилгаан</label>
   <span class="sep"></span>
   <button id="clear">Цэвэрлэх</button>
   <button id="full">⛶ Бүтэн дэлгэц</button>
@@ -247,7 +248,7 @@
 import { FilesetResolver, GestureRecognizer, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const VER = 'v5';
+const VER = 'v6';
 const $ = id => document.getElementById(id);
 const video = $('cam'), canvas = $('fx'), ctx = canvas.getContext('2d');
 
@@ -575,6 +576,101 @@ function matchMotion(seq, nHands){
   return {label:best, d:bestD};
 }
 
+/* ───────────── ⚡ цахилгаан эффект ─────────────
+   Хоёр алганы хооронд нум татна. Хүч нь алгануудын хоорондох зайгаар
+   тодорхойлогдоно — ойртуулах тусам хүчтэй. Зайг гарын хэмжээнд харьцуулж
+   хэмждэг тул камераас хол ойр зогссон нь нөлөөлөхгүй. */
+const PALM = [0,5,9,13,17];          // алганы суурийн цэгүүд
+let zapPower = 0;
+
+const palmCenter = lm => {
+  let x=0, y=0;
+  for (const i of PALM){ x+=lm[i].x; y+=lm[i].y; }
+  return { x:x/PALM.length, y:y/PALM.length };
+};
+const handSpan = lm => {
+  const w=lm[0]; let m=0;
+  for (const p of lm){ const d=Math.hypot(p.x-w.x, p.y-w.y); if (d>m) m=d; }
+  return m || 1e-6;
+};
+
+/* Дундаж цэгийг санамсаргүй хазайлгаж хугархай шугам үүсгэнэ */
+function bolt(a, b, amp){
+  let pts = [a, b];
+  for (let d=0; d<5; d++){
+    const out = [pts[0]];
+    for (let i=1;i<pts.length;i++){
+      const p=pts[i-1], q=pts[i];
+      const dx=q.x-p.x, dy=q.y-p.y, len=Math.hypot(dx,dy)||1;
+      const off=(Math.random()-0.5)*amp;
+      out.push({ x:(p.x+q.x)/2 - dy/len*off, y:(p.y+q.y)/2 + dx/len*off }, q);
+    }
+    pts = out; amp *= 0.55;
+  }
+  return pts;
+}
+
+function strokePts(pts, color, width, blur){
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(.6,width);
+  ctx.shadowColor='rgba(120,205,255,.9)'; ctx.shadowBlur=blur;
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+}
+
+function orb(P, r, p){
+  const g=ctx.createRadialGradient(P.x,P.y,0,P.x,P.y,r);
+  g.addColorStop(0,   'rgba(235,250,255,'+(.55+.4*p)+')');
+  g.addColorStop(.35, 'rgba(120,200,255,'+(.3+.35*p)+')');
+  g.addColorStop(1,   'rgba(60,140,255,0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(P.x,P.y,r,0,7); ctx.fill();
+}
+
+function drawZap(hands){
+  if (!$('zap').checked || hands.length !== 2){ zapPower = 0; return; }
+  const W=canvas.width, H=canvas.height, K=W/1280;   // дэлгэцийн хэмжээнд зохицуулах
+  const a=palmCenter(hands[0]), b=palmCenter(hands[1]);
+  const span=(handSpan(hands[0])+handSpan(hands[1]))/2;
+  const gap=Math.hypot(b.x-a.x, b.y-a.y)/span;       // гарын хэмжээгээр хэмжсэн зай
+  // алга наалдах орчим (~1.5) дүүрэн хүч, гар дэлгэсэн зайд (~7.5) унтарна
+  zapPower += (Math.max(0, Math.min(1, (7.5-gap)/6)) - zapPower) * 0.25;
+  const p = zapPower;
+  if (p < 0.04) return;
+
+  const A={x:a.x*W,y:a.y*H}, B={x:b.x*W,y:b.y*H};
+  const len=Math.hypot(B.x-A.x, B.y-A.y);
+
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  ctx.lineCap='round'; ctx.lineJoin='round';
+
+  orb(A,(22+46*p)*K, p); orb(B,(22+46*p)*K, p);
+
+  const n = 2 + Math.round(p*2);
+  for (let i=0;i<n;i++){
+    const pts = bolt(A, B, len*0.15*(0.45+Math.random()));
+    strokePts(pts, 'rgba(120,200,255,'+(.16+.3*p)+')', (5+9*p)*K, 26*p);
+    strokePts(pts, 'rgba(228,247,255,'+(.5+.45*p)+')', (1.5+1.7*p)*K, 10);
+    // салаа
+    if (Math.random() < .55*p + .25){
+      const s = pts[1 + Math.floor(Math.random()*(pts.length-2))];
+      const e = { x:s.x + (Math.random()-.5)*len*.35, y:s.y + (Math.random()-.5)*len*.35 };
+      strokePts(bolt(s, e, len*0.1), 'rgba(175,225,255,'+(.3+.3*p)+')', (1.2+1.4*p)*K, 8);
+    }
+  }
+  // оч
+  const sparks = Math.round(p*7);
+  for (let i=0;i<sparks;i++){
+    const t=Math.random(), r=(1+Math.random()*2.4)*K;
+    ctx.fillStyle='rgba(235,250,255,'+(.35+.5*Math.random())+')';
+    ctx.beginPath();
+    ctx.arc(A.x+(B.x-A.x)*t + (Math.random()-.5)*len*.22,
+            A.y+(B.y-A.y)*t + (Math.random()-.5)*len*.22, r, 0, 7);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 /* ───────────── үндсэн давталт ───────────── */
 let lastT=-1;
 let prevWrist=null, vel=0;                 // гарын хурд (гарын хэмжээгээр норм.)
@@ -617,6 +713,8 @@ function handle(res){
       draw.drawLandmarks(lm, {color:'#39d98a', lineWidth:1, radius:4});
     }
   }
+
+  drawZap(hands);
 
   /* гар алга болсон */
   if (!hands.length){
@@ -921,7 +1019,7 @@ document.addEventListener('mousemove',wake); document.addEventListener('keydown'
 setMode('static'); renderList(); renderBuiltin();
 
 // шалгах/тохируулахад хэрэгтэй дотоод функцууд
-window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption };
+window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption, drawZap };
 </script>
 </body>
 </html>
