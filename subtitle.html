@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Амьд хадмал</title>
+<style>
+  :root{
+    --bg:#0b0b0d;
+    --panel:rgba(20,20,24,.82);
+    --line:rgba(255,255,255,.14);
+    --fg:#f3f3f5;
+    --muted:#a0a0aa;
+    --accent:#4ea1ff;
+    --danger:#ff5f57;
+    --cap:56px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+    overflow:hidden;
+  }
+
+  #stage{position:fixed; inset:0; background:#000;}
+  #cam{width:100%; height:100%; object-fit:cover; display:block; background:#000;}
+  #cam.mirror{transform:scaleX(-1)}
+  body.nocam #cam{display:none}
+
+  #caption{
+    position:absolute; left:0; right:0; bottom:9%;
+    padding:0 6vw; text-align:center;
+    font-size:var(--cap); font-weight:800; line-height:1.28;
+    letter-spacing:.2px; word-break:break-word;
+    text-shadow:0 2px 10px rgba(0,0,0,.85);
+    -webkit-text-stroke:2px rgba(0,0,0,.9);
+    paint-order:stroke fill;
+    pointer-events:none;
+  }
+  #interim{opacity:.72}
+  #caption:empty::after{
+    content:"Ярьж эхлэхэд текст энд гарна";
+    font-size:.45em; font-weight:600; opacity:.35; -webkit-text-stroke:0;
+  }
+
+  #bar{
+    position:fixed; top:0; left:0; right:0; z-index:5;
+    display:flex; flex-wrap:wrap; align-items:center; gap:10px;
+    padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--line);
+    backdrop-filter:blur(10px);
+    transition:opacity .35s, transform .35s;
+  }
+  body.idle #bar{opacity:0; transform:translateY(-100%)}
+  button,select{
+    font:inherit; font-size:14px; color:var(--fg);
+    background:#26262c; border:1px solid var(--line); border-radius:8px;
+    padding:8px 13px; cursor:pointer;
+  }
+  button:hover,select:hover{background:#31313a}
+  #mic{background:var(--accent); border-color:transparent; color:#04101f; font-weight:700; min-width:140px}
+  #mic.on{background:var(--danger); color:#fff}
+  label.chk{display:flex; align-items:center; gap:6px; font-size:14px; color:var(--muted); cursor:pointer}
+  input[type=range]{width:120px; accent-color:var(--accent)}
+  .sep{flex:1}
+  .hint{font-size:12px; color:var(--muted)}
+
+  #status{
+    position:fixed; bottom:12px; left:14px; z-index:5;
+    font-size:13px; color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:7px 12px; max-width:52vw;
+    transition:opacity .35s;
+  }
+  #status:empty{display:none}
+  #status.err{color:#ffb4ae; border-color:rgba(255,95,87,.45)}
+  body.idle #status{opacity:0}
+</style>
+</head>
+<body class="nocam">
+
+<div id="stage">
+  <video id="cam" autoplay muted playsinline></video>
+  <div id="caption"><span id="final"></span><span id="interim"></span></div>
+</div>
+
+<div id="bar">
+  <button id="mic">▶ Сонсож эхлэх</button>
+  <select id="lang" title="Ярианы хэл">
+    <option value="mn-MN">Монгол (mn-MN)</option>
+    <option value="ru-RU">Орос (ru-RU)</option>
+    <option value="en-US">Англи (en-US)</option>
+    <option value="ko-KR">Солонгос (ko-KR)</option>
+    <option value="ja-JP">Япон (ja-JP)</option>
+    <option value="zh-CN">Хятад (zh-CN)</option>
+  </select>
+  <button id="camBtn">📷 Камер асаах</button>
+  <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
+  <label class="chk">Үсгийн хэмжээ <input type="range" id="size" min="24" max="120" value="56"></label>
+  <button id="clear">Цэвэрлэх</button>
+  <button id="full">⛶ Бүтэн дэлгэц</button>
+  <span class="sep"></span>
+  <span class="hint">Зай = эхлэх/зогсоох · F = бүтэн дэлгэц · C = цэвэрлэх</span>
+</div>
+
+<div id="status"></div>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const micBtn = $('mic'), langSel = $('lang'), camBtn = $('camBtn');
+  const finalEl = $('final'), interimEl = $('interim'), statusEl = $('status');
+
+  let rec = null, running = false, stream = null;
+  let lines = [];                 // сүүлийн бүрэн өгүүлбэрүүд
+  const KEEP = 2;                 // дэлгэцэнд харуулах мөрийн тоо
+
+  function say(msg, isErr) {
+    statusEl.textContent = msg || '';
+    statusEl.classList.toggle('err', !!isErr);
+  }
+
+  function render(interim) {
+    finalEl.textContent = lines.slice(-KEEP).join(' ');
+    interimEl.textContent = (finalEl.textContent && interim ? ' ' : '') + (interim || '');
+  }
+
+  /* ---------- яриа таних ---------- */
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  function build() {
+    const r = new SR();
+    r.lang = langSel.value;
+    r.continuous = true;
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+
+    r.onstart = () => say('Сонсож байна… (' + r.lang + ')');
+
+    r.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          const t = txt.trim();
+          if (t) lines.push(t);
+          if (lines.length > 40) lines.shift();
+        } else {
+          interim += txt;
+        }
+      }
+      render(interim);
+    };
+
+    r.onerror = e => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;   // энгийн зүйл, алгасна
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        stop(); say('Микрофон хаалттай байна. Хөтчийн хаягийн мөрний 🔒 дээр дарж Microphone-г Allow болго.', true);
+      } else if (e.error === 'language-not-supported') {
+        stop(); say('"' + langSel.value + '" хэлийг энэ хөтөч дэмжихгүй байна. Доорх Plan B-г үз.', true);
+      } else if (e.error === 'network') {
+        say('Сүлжээний алдаа — яриа таних нь интернэт шаарддаг бөгөөд хуудас http://localhost эсвэл https дээр нээгдсэн байх ёстой.', true);
+      } else {
+        say('Алдаа: ' + e.error, true);
+      }
+    };
+
+    // Chrome чимээгүй болмогц өөрөө зогсдог тул дахин асаана
+    r.onend = () => {
+      if (!running) return;
+      try { r.start(); } catch (_) { setTimeout(() => { if (running) try { r.start(); } catch (e) {} }, 400); }
+    };
+
+    return r;
+  }
+
+  function start() {
+    if (!SR) { say('Энэ хөтөч яриа таних боломжгүй. Chrome эсвэл Edge ашиглана уу.', true); return; }
+    rec = build();
+    running = true;
+    micBtn.textContent = '■ Зогсоох';
+    micBtn.classList.add('on');
+    try { rec.start(); } catch (_) {}
+  }
+
+  function stop() {
+    running = false;
+    micBtn.textContent = '▶ Сонсож эхлэх';
+    micBtn.classList.remove('on');
+    if (rec) { try { rec.stop(); } catch (_) {} rec = null; }
+    say('Зогссон.');
+  }
+
+  micBtn.onclick = () => running ? stop() : start();
+
+  langSel.onchange = () => { if (running) { stop(); setTimeout(start, 200); } };
+
+  /* ---------- камер ---------- */
+
+  async function toggleCam() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      $('cam').srcObject = null;
+      document.body.classList.add('nocam');
+      camBtn.textContent = '📷 Камер асаах';
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+      $('cam').srcObject = stream;
+      document.body.classList.remove('nocam');
+      camBtn.textContent = '📷 Камер унтраах';
+      say('');
+    } catch (err) {
+      say('Камер нээгдсэнгүй: ' + err.name + '. Хаягийн мөрний 🔒 → Camera → Allow.', true);
+    }
+  }
+  camBtn.onclick = toggleCam;
+
+  /* ---------- бусад тохиргоо ---------- */
+
+  $('mirror').onchange = e => $('cam').classList.toggle('mirror', e.target.checked);
+  $('cam').classList.add('mirror');
+
+  $('size').oninput = e => document.documentElement.style.setProperty('--cap', e.target.value + 'px');
+
+  $('clear').onclick = () => { lines = []; render(''); };
+
+  $('full').onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  };
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.code === 'Space') { e.preventDefault(); micBtn.click(); }
+    if (e.key.toLowerCase() === 'f') $('full').click();
+    if (e.key.toLowerCase() === 'c') $('clear').click();
+  });
+
+  // хулгана хөдөлгөөнгүй 3 секунд болбол удирдлагыг нуух
+  let idleTimer;
+  function wake() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
+  }
+  document.addEventListener('mousemove', wake);
+  document.addEventListener('keydown', wake);
+  wake();
+
+  if (!SR) say('Анхаар: энэ хөтөч Web Speech API-г дэмжихгүй. Chrome эсвэл Edge дээр нээнэ үү.', true);
+  else if (!location.protocol.startsWith('http')) say('Анхаар: файлыг шууд нээсэн бол микрофон ажиллахгүй. http://localhost дээр нээнэ үү.', true);
+})();
+</script>
+</body>
+</html>

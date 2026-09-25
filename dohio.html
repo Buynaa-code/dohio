@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Гарын дохио — Монгол текст</title>
+<style>
+  :root{
+    --bg:#08090c; --panel:rgba(18,19,24,.92); --line:rgba(255,255,255,.13);
+    --fg:#f2f3f6; --muted:#9a9ba6; --accent:#4ea1ff; --ok:#39d98a; --warn:#ffc34e; --danger:#ff5f57;
+    --cap:64px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:"Segoe UI",system-ui,Arial,sans-serif;overflow:hidden}
+
+  /* ---- дэлгэц ---- */
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000}
+  /* хэмжээг нь JS-ээр өгнө — дотоод элементүүд нь absolute тул
+     CSS дангаараа энэ хайрцгийн хэмжээг тодорхойлж чаддаггүй */
+  #view{position:relative;background:#000;width:0;height:0}
+  #view.mirror{transform:scaleX(-1)}
+  #cam,#fx{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #fx{pointer-events:none}
+
+  #caption{
+    position:fixed;left:0;right:var(--panelw,340px);bottom:8%;z-index:4;
+    display:flex;justify-content:center;padding:0 3vw;pointer-events:none;
+  }
+  #capText{
+    display:inline-block;max-width:100%;text-align:center;
+    font-size:var(--cap);font-weight:800;line-height:1.26;letter-spacing:.2px;
+    color:#fff;text-shadow:0 3px 20px rgba(0,0,0,.95);
+    -webkit-text-stroke:1.5px rgba(0,0,0,.55);paint-order:stroke fill;
+    padding:.3em .62em;border-radius:20px;
+    background:linear-gradient(180deg,rgba(9,11,17,.40),rgba(9,11,17,.66));
+    border:1px solid rgba(255,255,255,.10);
+    box-shadow:0 20px 70px rgba(0,0,0,.5);
+    backdrop-filter:blur(7px);
+  }
+  #capText:empty{display:none}
+  #capText.pop{animation:pop .42s cubic-bezier(.2,.9,.25,1)}
+  @keyframes pop{from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:none}}
+  #history{
+    position:fixed;left:0;right:var(--panelw,340px);bottom:3.2%;text-align:center;
+    font-size:20px;font-weight:600;color:rgba(255,255,255,.45);
+    text-shadow:0 2px 8px #000;pointer-events:none;
+  }
+
+  /* ---- анхааруулга ---- */
+  #warn{position:fixed;left:14px;bottom:14px;z-index:7;max-width:min(520px,60vw);
+        font-size:13px;line-height:1.5;color:var(--fg);
+        background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+  #warn:empty{display:none}
+  #warn.err{border-color:rgba(255,195,78,.5);color:#ffdf9e}
+  #warn button{background:none;border:0;color:var(--muted);font-size:16px;cursor:pointer;padding:0 2px}
+
+  /* ---- камер унтраалттай үеийн том товч ---- */
+  #hint{position:fixed;top:0;bottom:0;left:0;right:var(--panelw,340px);z-index:3;
+        display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:16px;text-align:center;padding:24px}
+  #hint.off{display:none}
+  #bigStart{font-size:22px;font-weight:700;padding:18px 34px;border-radius:14px;
+            background:var(--accent);color:#03101f;border:0;box-shadow:0 10px 40px rgba(78,161,255,.35)}
+  #bigStart:hover{background:#6fb4ff}
+  #hintMsg{font-size:15px;color:var(--muted);max-width:480px;line-height:1.6}
+  #hintMsg.err{color:#ffb4ae;font-weight:600}
+  #diag{font-size:12px;color:#6d6e78;max-width:520px;line-height:1.7}
+
+  /* хөдөлгөөн бичиж байгаа улаан хүрээ */
+  #live-ring{position:fixed;inset:0;pointer-events:none;border:0 solid var(--warn);
+             transition:border-width .12s;z-index:4}
+  body.capturing #live-ring{border-width:6px}
+
+  /* ---- дээд самбар ---- */
+  #bar{
+    position:fixed;top:0;left:0;right:0;z-index:6;display:flex;flex-wrap:wrap;gap:9px;align-items:center;
+    padding:10px 13px;background:var(--panel);border-bottom:1px solid var(--line);backdrop-filter:blur(12px);
+    transition:opacity .35s,transform .35s;
+  }
+  body.idle #bar{opacity:0;transform:translateY(-100%)}
+  button,select,input[type=text]{
+    font:inherit;font-size:14px;color:var(--fg);background:#26262e;
+    border:1px solid var(--line);border-radius:8px;padding:8px 12px;
+  }
+  button{cursor:pointer}
+  button:hover{background:#32323c}
+  button.primary{background:var(--accent);color:#03101f;font-weight:700;border-color:transparent}
+  label.chk{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);cursor:pointer}
+  .sep{flex:1}
+  .pill{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;white-space:nowrap}
+  .pill b{color:var(--ok)}
+  .pill.move b{color:var(--warn)}
+
+  /* хөдөлгөөний хэмжүүр */
+  #meter{width:74px;height:6px;border-radius:99px;background:#2a2a33;overflow:hidden}
+  #meter i{display:block;height:100%;width:0;background:var(--warn);transition:width .08s}
+
+  /* ---- баруун самбар ---- */
+  #panel{
+    position:fixed;top:56px;right:0;bottom:0;width:340px;z-index:5;overflow-y:auto;
+    background:var(--panel);border-left:1px solid var(--line);backdrop-filter:blur(12px);
+    padding:14px;transition:transform .3s;
+  }
+  #panel.hidden{transform:translateX(100%)}
+  #panel h3{margin:0 0 9px;font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+  #panel section{margin-bottom:22px}
+  .row{display:flex;gap:7px;margin-bottom:8px}
+  .row input[type=text]{flex:1;min-width:0}
+  .note{font-size:12px;color:var(--muted);line-height:1.55}
+  .seg{flex:1;text-align:center}
+  .seg.on{background:var(--accent);color:#03101f;font-weight:700;border-color:transparent}
+  .item{display:flex;align-items:center;gap:8px;padding:7px 9px;margin-bottom:5px;
+        background:#1d1d24;border:1px solid var(--line);border-radius:8px;font-size:14px}
+  .item.hot{border-color:var(--ok);background:#16241d}
+  .item .w{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .n{font-size:11px;color:var(--muted);white-space:nowrap}
+  .tag{font-size:10px;padding:2px 6px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .tag.m{color:var(--warn);border-color:rgba(255,195,78,.4)}
+  .item .x{background:none;border:0;color:var(--muted);cursor:pointer;padding:2px 5px;font-size:16px}
+  .item .x:hover{color:var(--danger)}
+  .slider{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);margin-bottom:9px}
+  .slider input{flex:1;accent-color:var(--accent)}
+  .slider b{color:var(--fg);min-width:34px;text-align:right}
+
+  /* ---- бичиж авах overlay ---- */
+  #rec{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;
+       background:rgba(0,0,0,.5);backdrop-filter:blur(3px)}
+  #rec.on{display:flex}
+  #recBox{text-align:center}
+  #recNum{font-size:150px;font-weight:800;line-height:1;text-shadow:0 6px 30px #000}
+  #recTxt{font-size:23px;font-weight:600;margin-top:12px;color:#fff;text-shadow:0 2px 10px #000}
+  #recBar{width:300px;height:6px;margin:20px auto 0;background:rgba(255,255,255,.2);border-radius:99px;overflow:hidden}
+  #recBar i{display:block;height:100%;width:0;background:var(--ok)}
+
+  #boot{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;
+        flex-direction:column;gap:14px;background:var(--bg);text-align:center;padding:24px}
+  #boot.done{display:none}
+  #boot .t{font-size:18px;font-weight:600}
+  #boot .s{font-size:14px;color:var(--muted);max-width:460px;line-height:1.6}
+  .spin{width:30px;height:30px;border:3px solid var(--line);border-top-color:var(--accent);
+        border-radius:50%;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="view" class="mirror">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="fx"></canvas>
+  </div>
+</div>
+<div id="live-ring"></div>
+
+<div id="hint">
+  <button id="bigStart">▶ Камер асаах</button>
+  <div id="hintMsg">Дарж камераа асаана уу. Хөтөч зөвшөөрөл асуувал <b>Allow</b> гэж хариул.</div>
+  <div id="diag"></div>
+</div>
+
+<div id="caption"><span id="capText"></span></div>
+<div id="history"></div>
+<div id="warn"></div>
+
+<div id="bar">
+  <button id="start" class="primary">▶ Камер асаах</button>
+  <select id="camSel" title="Аль камерыг ашиглах вэ" style="display:none;max-width:200px"></select>
+  <span class="pill" id="camInfo" style="display:none"></span>
+  <span class="pill">Танилт: <b id="live">—</b></span>
+  <span class="pill move">Хөдөлгөөн <span id="meter"><i></i></span></span>
+  <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
+  <label class="chk"><input type="checkbox" id="skel" checked> Гарын зураас</label>
+  <label class="chk"><input type="checkbox" id="builtin" checked> Бэлэн дохио</label>
+  <span class="sep"></span>
+  <button id="clear">Цэвэрлэх</button>
+  <button id="full">⛶ Бүтэн дэлгэц</button>
+  <button id="toggle">☰ Тохиргоо</button>
+</div>
+
+<div id="panel">
+  <section>
+    <h3>Шинэ дохио заах</h3>
+    <div class="row">
+      <button id="mStatic" class="seg on">✋ Байрлал</button>
+      <button id="mMotion" class="seg">🌀 Хөдөлгөөн</button>
+    </div>
+    <div class="row">
+      <input type="text" id="word" placeholder="Гарах үг: Сайн байна уу" autocomplete="off">
+      <button id="teach" class="primary">Бичих</button>
+    </div>
+    <p class="note" id="teachNote"></p>
+  </section>
+
+  <section>
+    <h3>Заасан дохионууд</h3>
+    <div id="list"></div>
+    <p class="note" id="empty">Одоогоор хоосон. Дээрээс зааж өг.</p>
+    <div class="row" style="margin-top:9px">
+      <button id="exp">Хадгалах (.json)</button>
+      <button id="imp">Сэргээх</button>
+      <input type="file" id="impFile" accept=".json" hidden>
+    </div>
+  </section>
+
+  <section>
+    <h3>Байрлалын тохиргоо</h3>
+    <div class="slider">Мэдрэг<input type="range" id="thr" min="10" max="60" value="32"><b id="thrV">.32</b></div>
+    <div class="slider">Барих<input type="range" id="hold" min="2" max="25" value="7"><b id="holdV">7</b></div>
+    <p class="note">Мэдрэг бага = хатуу. Барих = хэдэн кадр тогтвортой байхад үг гаргах вэ.</p>
+  </section>
+
+  <section>
+    <h3>Хөдөлгөөний тохиргоо</h3>
+    <div class="slider">Мэдрэг<input type="range" id="mthr" min="10" max="130" value="35"><b id="mthrV">.35</b></div>
+    <p class="note">Хөдөлгөөнийг хэр зөрүүтэй байхад нь зөвшөөрөх вэ. Дээд талын «Танилт» дээр
+      хэмжсэн зөрүү тоогоор гарна — таарах ёстой атлаа гарахгүй байвал энэ тоонос арай өндөр болго.</p>
+    <div class="slider">Эхлэх<input type="range" id="vstart" min="4" max="40" value="13"><b id="vstartV">.13</b></div>
+    <p class="note">Гар ямар хурдтай хөдлөхөд «бичиж» эхлэх вэ. Бага = амархан хөдөлгөөн гэж үзнэ.</p>
+  </section>
+
+  <section>
+    <h3>Бэлэн дохионы үг</h3>
+    <div id="bmap"></div>
+    <p class="note">Загварт агуулагдсан 7 энгийн байрлал. Үгийг нь дарж өөрчилж болно.</p>
+  </section>
+
+  <section>
+    <h3>Дэлгэц</h3>
+    <div class="slider">Үсэг<input type="range" id="size" min="28" max="130" value="64"><b id="sizeV">64</b></div>
+  </section>
+</div>
+
+<div id="rec"><div id="recBox">
+  <div id="recNum">3</div>
+  <div id="recTxt"></div>
+  <div id="recBar"><i></i></div>
+</div></div>
+
+<div id="boot">
+  <div class="spin"></div>
+  <div class="t">Дохио таних загвар ачаалж байна…</div>
+  <div class="s" id="bootMsg">Эхний удаад хэдэн секунд болно.</div>
+</div>
+
+<script type="module">
+import { FilesetResolver, GestureRecognizer, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const VER = 'v5';
+const $ = id => document.getElementById(id);
+const video = $('cam'), canvas = $('fx'), ctx = canvas.getContext('2d');
+
+/* ───────────── тогтмолууд ───────────── */
+const SEQ_LEN    = 16;    // хөдөлгөөнийг хэдэн кадр болгож жигдрүүлэх вэ
+const MAX_FRAMES = 80;    // хөдөлгөөний дээд урт (~2.6 сек)
+const MIN_FRAMES = 8;     // үүнээс богино бол хөдөлгөөн гэж тооцохгүй
+const REC_MS     = 2600;  // заах үеийн бичлэгийн урт
+const STILL_N    = 6;     // хэдэн кадр зогсвол хөдөлгөөн дууссан гэж үзэх вэ
+const W_TRAJ     = 1.0;   // замын жин (хэлбэрийн эсрэг)
+const MAX_SAMPLES_S = 90, MAX_SAMPLES_M = 6;
+
+/* ───────────── санах ой ───────────── */
+const KEY = 'mn-dohio-v1';
+const BUILTIN_DEFAULT = {
+  Open_Palm_2:'Media багийн цугларалтад ирсэн хүмүүстээ баярлалаа',
+  Open_Palm:'Сайн байна уу', Thumb_Up:'Тийм', Thumb_Down:'Үгүй', Victory:'Баярлалаа',
+  Pointing_Up:'Анхаарна уу', Closed_Fist:'Зогс', ILoveYou:'Хайртай'
+};
+const BUILTIN_NAME = {
+  Open_Palm_2:'✋✋ Хоёр алга', Open_Palm:'✋ Нэг алга', Thumb_Up:'👍 Эрхий дээш',
+  Thumb_Down:'👎 Эрхий доош', Victory:'✌️ V тэмдэг', Pointing_Up:'☝️ Дээш заах',
+  Closed_Fist:'✊ Нударга', ILoveYou:'🤟 Хайрын тэмдэг'
+};
+let store = { custom:{}, builtin:{...BUILTIN_DEFAULT} };
+try {
+  const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+  if (s) store = { custom:s.custom||{}, builtin:{...BUILTIN_DEFAULT, ...(s.builtin||{})} };
+} catch(_) {}
+// хуучин хадгалсан дохиод төрөл байхгүй — байрлал гэж үзнэ
+for (const g of Object.values(store.custom)) if (!g.type) g.type = 'static';
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(_){} };
+const hasMotion = () => Object.values(store.custom).some(g => g.type === 'motion');
+
+/* ───────────── загвар ачаалах ───────────── */
+let recognizer = null, draw = null;
+const MODEL = location.protocol === 'file:'
+  ? 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task'
+  : 'gesture_recognizer.task';
+const slow = setTimeout(() => {
+  $('bootMsg').innerHTML = 'Удаж байна. Эхний удаад ~10 MB татдаг тул интернэт холболтоо шалгана уу. ' +
+                           'Хэрэв 1 минутаас удвал хуудсыг дахин ачаална уу (F5).';
+}, 12000);
+try {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  recognizer = await GestureRecognizer.createFromOptions(vision, {
+    baseOptions:{ modelAssetPath: MODEL, delegate:'GPU' },
+    runningMode:'VIDEO', numHands:2,
+    minHandDetectionConfidence:0.5, minTrackingConfidence:0.5
+  });
+  draw = new DrawingUtils(ctx);
+  clearTimeout(slow);
+  $('boot').classList.add('done');
+} catch (err) {
+  clearTimeout(slow);
+  $('boot').querySelector('.spin').style.display='none';
+  $('boot').querySelector('.t').textContent='Загвар ачаалж чадсангүй';
+  $('bootMsg').textContent = err.message + ' — интернэт холболтоо шалгаад хуудсыг дахин ачаална уу.';
+  throw err;
+}
+
+/* ───────────── камер ───────────── */
+let stream = null, looping = false;
+$('start').onclick = async () => {
+  if (stream) {
+    stream.getTracks().forEach(t=>t.stop()); stream=null; looping=false;
+    $('start').textContent='▶ Камер асаах'; $('start').classList.add('primary');
+    ctx.clearRect(0,0,canvas.width,canvas.height); resetAll();
+    hintMsg('Камер унтраалттай. Дарж дахин асаана уу.');
+    return;
+  }
+  hintMsg('Камер асааж байна…');
+  try {
+    if (!navigator.mediaDevices?.getUserMedia)
+      throw Object.assign(new Error('no api'), {name:'NoApiError'});
+    try {
+      stream = await openCam(curDev || null);
+    } catch (e1) {
+      // хадгалсан камер олдохгүй/нягтрал таарахгүй бол энгийнээр дахин оролдоно
+      if (['OverconstrainedError','NotReadableError','NotFoundError'].includes(e1.name) && curDev){
+        curDev=''; stream = await openCam(null);
+      } else if (e1.name==='OverconstrainedError' || e1.name==='NotReadableError'){
+        stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      } else throw e1;
+    }
+
+    await listCams();
+    // IR (Windows Hello) камер сонгогдвол жирийн камер руу өөрөө шилжинэ
+    const used = curLabel();
+    if (!curDev && isIR(used)){
+      const alt = cams.find(d => !isIR(d.label));
+      if (alt){
+        stream.getTracks().forEach(t=>t.stop());
+        stream = await openCam(alt.deviceId);
+        warn('IR (хэт улаан туяа) камер сонгогдсон тул <b>'+alt.label+'</b> руу шилжүүллээ.');
+      }
+    }
+    curDev = stream.getVideoTracks()[0].getSettings().deviceId || '';
+    try { localStorage.setItem(CAMKEY, curDev); } catch(_){}
+    $('camSel').value = curDev;
+
+    video.srcObject = stream; await video.play();
+    canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+    fit();
+    $('start').textContent='■ Камер унтраах'; $('start').classList.remove('primary');
+    $('hint').classList.add('off');
+    looping = true; requestAnimationFrame(loop);
+    setTimeout(darkCheck, 1400);
+  } catch (e) {
+    stream = null;
+    const tips = {
+      NotAllowedError:'Камер ашиглах зөвшөөрөл өгөөгүй байна. Хаягийн мөрний зүүн талын 🔒 (эсвэл камерын тэмдэг) дээр дарж <b>Camera → Allow</b> болгоод хуудсыг дахин ачаална уу.',
+      NotFoundError:'Камер олдсонгүй. Notebook-ийн камер унтраатай эсвэл салсан байж магадгүй.',
+      NotReadableError:'Камерыг өөр програм эзэмшиж байна. Zoom, Teams, Skype, Camera зэргийг хаагаад дахин оролдоно уу.',
+      NoApiError:'Энэ хөтөч камер дэмжихгүй эсвэл хуудас аюулгүй хаягаар нээгдээгүй байна. <b>ekhluuleh.ps1</b>-ээр нээж, хаяг нь <b>http://localhost:8777</b> байгаа эсэхийг шалгана уу.',
+      SecurityError:'Хуудас аюулгүй хаягаар нээгдээгүй тул камер хоригдож байна. <b>ekhluuleh.ps1</b>-ээр нээнэ үү.'
+    };
+    hintMsg((tips[e.name] || ('Камер нээгдсэнгүй: '+e.name)) , true);
+  }
+};
+
+function hintMsg(html, isErr){
+  $('hint').classList.remove('off');
+  $('hintMsg').innerHTML = html;
+  $('hintMsg').classList.toggle('err', !!isErr);
+}
+
+/* ───────────── камер сонгох ─────────────
+   HP зэрэг notebook-д Windows Hello-гийн IR камер байдаг. Тэр нь хэт улаан
+   туяагаар авдаг тул дүрс нь бараг хар гардаг — хөтөч түүнийг сонгож аввал
+   «дэлгэц харанхуй» болно. Тиймээс IR-ээс зайлсхийж, жагсаалтаас сонгох
+   боломжтой болгов. */
+const CAMKEY = 'mn-dohio-cam';
+let cams = [], curDev = '';
+try { curDev = localStorage.getItem(CAMKEY) || ''; } catch(_){}
+
+const isIR = l => /(^|[^a-z])(ir|infra\w*)([^a-z]|$)/i.test(l || '');
+const curLabel = () => {
+  const t = stream && stream.getVideoTracks()[0];
+  if (!t) return '';
+  const id = t.getSettings().deviceId;
+  return (cams.find(d=>d.deviceId===id) || {}).label || t.label || '';
+};
+
+function openCam(deviceId){
+  const v = { width:{ideal:1280}, height:{ideal:720} };
+  if (deviceId) v.deviceId = { exact: deviceId };
+  return navigator.mediaDevices.getUserMedia({ video:v, audio:false });
+}
+
+async function listCams(){
+  const ds = await navigator.mediaDevices.enumerateDevices();
+  cams = ds.filter(d => d.kind === 'videoinput');
+  const sel = $('camSel');
+  sel.innerHTML = '';
+  cams.forEach((d,i) => {
+    const o = document.createElement('option');
+    o.value = d.deviceId;
+    o.textContent = (d.label || ('Камер ' + (i+1))) + (isIR(d.label) ? ' (IR — харанхуй)' : '');
+    sel.appendChild(o);
+  });
+  sel.style.display = cams.length > 1 ? '' : 'none';
+}
+
+$('camSel').onchange = async e => {
+  const id = e.target.value;
+  if (!stream) { curDev = id; return; }
+  try {
+    looping = false;
+    stream.getTracks().forEach(t=>t.stop());
+    stream = await openCam(id);
+    video.srcObject = stream; await video.play();
+    canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+    fit();
+    curDev = id;
+    try { localStorage.setItem(CAMKEY, curDev); } catch(_){}
+    resetAll(); warn('');
+    looping = true; requestAnimationFrame(loop);
+    setTimeout(darkCheck, 1400);
+  } catch (err) {
+    warn('Энэ камерыг нээж чадсангүй: ' + err.name, true);
+  }
+};
+
+/* дүрсний дундаж гэрэл (0–255) */
+const probe = document.createElement('canvas'); probe.width=64; probe.height=36;
+function brightness(){
+  if (!stream || !video.videoWidth) return -1;
+  const x = probe.getContext('2d');
+  try { x.drawImage(video,0,0,64,36); } catch(_) { return -1; }
+  const d = x.getImageData(0,0,64,36).data;
+  let s=0; for (let i=0;i<d.length;i+=4) s += (d[i]+d[i+1]+d[i+2])/3;
+  return s/(d.length/4);
+}
+
+/* байдлын мөр: хувилбар · камер · нягтрал · гэрэл */
+setInterval(() => {
+  const el = $('camInfo');
+  if (!stream || !video.videoWidth){ el.style.display='none'; return; }
+  el.style.display='';
+  el.textContent = VER + ' · ' + (curLabel() || 'камер') + ' · ' +
+                   video.videoWidth + '×' + video.videoHeight +
+                   ' · гэрэл ' + Math.round(brightness());
+}, 2000);
+
+/* дүрс хэт харанхуй эсэхийг шалгана */
+function darkCheck(){
+  const avg = brightness();
+  if (avg < 0) return;
+  if (avg < 24){
+    warn('Дүрс маш харанхуй байна (гэрэл '+avg.toFixed(0)+'/255). ' +
+         (cams.length>1 ? 'Дээрх жагсаалтаас <b>өөр камер</b> сонгоод үзнэ үү.'
+                        : 'Өрөөний гэрлээ нэмнэ үү.'), true);
+  }
+}
+
+function warn(html, isErr){
+  const w = $('warn');
+  w.innerHTML = html ? html + ' <button id="warnX" title="Хаах">×</button>' : '';
+  w.classList.toggle('err', !!isErr);
+  if (html) $('warnX').onclick = () => warn('');
+}
+
+/* ───────────── оношлогоо ───────────── */
+(async () => {
+  const bits = [];
+  const ok = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
+  bits.push('Хаяг: ' + location.protocol + '//' + (location.host || '(файл)') + (ok ? ' ✓' : ' ✗ — localhost биш'));
+  bits.push('Камерын API: ' + (navigator.mediaDevices?.getUserMedia ? 'байна ✓' : 'байхгүй ✗'));
+  try {
+    const ds = await navigator.mediaDevices.enumerateDevices();
+    const n = ds.filter(d=>d.kind==='videoinput').length;
+    bits.push('Олдсон камер: ' + n + (n ? ' ✓' : ' ✗'));
+  } catch(_) { bits.push('Олдсон камер: тодорхойгүй'); }
+  bits.push('Хувилбар: ' + VER);
+  $('diag').innerHTML = bits.join(' &nbsp;·&nbsp; ');
+  if (!ok) hintMsg('Энэ хуудас <b>localhost</b>-оор нээгдээгүй байна. Файл дээр нь давхар дарсан бол камер ажиллахгүй — <b>ekhluuleh.ps1</b> дээр баруун товч → <b>Run with PowerShell</b> гэж нээнэ үү.', true);
+})();
+
+$('bigStart').onclick = () => $('start').click();
+
+/* ───────────── онцлог гаргах ─────────────
+   Нэг кадраас: гарын ХЭЛБЭР (бугуйгаар төвлүүлж, хэмжээгээр масштаблав)
+   + бугуйн БАЙРЛАЛ (хөдөлгөөний зам тооцоход) + гарын хэмжээ. */
+function frameFeat(hands) {
+  const shape=[], wrist=[]; let scale=0;
+  for (const lm of hands) {
+    const w = lm[0]; let max=0; const pts=[];
+    for (const p of lm) {
+      const dx=p.x-w.x, dy=p.y-w.y;
+      const d=Math.hypot(dx,dy); if (d>max) max=d;
+      pts.push(dx,dy);
+    }
+    if (max<1e-6) max=1e-6;
+    for (let i=0;i<pts.length;i+=2) shape.push(pts[i]/max, pts[i+1]/max);
+    wrist.push(w.x, w.y); scale += max;
+  }
+  return { shape, wrist, scale: scale/hands.length || 1e-6, hands: hands.length };
+}
+
+/* Кадрын цувааг — байрлал, хэмжээнээс хамаарахгүй дараалал болгоно.
+   Замыг цувааны дундажаар төвлүүлж, гарын хэмжээгээр хуваана. */
+function buildSeq(frames) {
+  const n = frames.length, H2 = frames[0].wrist.length;
+  const ms = frames.reduce((a,f)=>a+f.scale,0)/n || 1e-6;
+  const mean = new Array(H2).fill(0);
+  for (const f of frames) for (let i=0;i<H2;i++) mean[i] += f.wrist[i]/n;
+  return frames.map(f => ({
+    s: f.shape,
+    t: f.wrist.map((v,i)=>(v-mean[i])/ms)
+  }));
+}
+function resample(seq, n=SEQ_LEN) {
+  if (seq.length === n) return seq;
+  const out=[];
+  for (let i=0;i<n;i++) out.push(seq[Math.min(seq.length-1, Math.round(i*(seq.length-1)/(n-1)))]);
+  return out;
+}
+const round3 = a => a.map(v=>Math.round(v*1000)/1000);
+const packSeq = seq => seq.map(f=>({ s:round3(f.s), t:round3(f.t) }));
+
+/* ───────────── зай хэмжих ───────────── */
+function shapeDist(a,b){
+  if (a.length!==b.length) return Infinity;
+  let s=0; for (let i=0;i<a.length;i+=2) s+=Math.hypot(a[i]-b[i],a[i+1]-b[i+1]);
+  return s/(a.length/2);
+}
+function frameDist(a,b){
+  const ds = shapeDist(a.s,b.s);
+  if (!isFinite(ds)) return Infinity;
+  let dt=0; for (let i=0;i<a.t.length;i+=2) dt+=Math.hypot(a.t[i]-b.t[i],a.t[i+1]-b.t[i+1]);
+  return ds + W_TRAJ*(dt/(a.t.length/2));
+}
+/* Динамик цаг мушгилт — өөр өөр хурдтай хийсэн нэг хөдөлгөөнийг тааруулна */
+function dtw(A,B){
+  const n=A.length, m=B.length, INF=Infinity;
+  let prev=new Array(m+1).fill(INF), cur=new Array(m+1).fill(INF);
+  prev[0]=0;
+  for (let i=1;i<=n;i++){
+    cur[0]=INF;
+    for (let j=1;j<=m;j++){
+      const c=frameDist(A[i-1],B[j-1]);
+      cur[j]=c+Math.min(prev[j],cur[j-1],prev[j-1]);
+    }
+    const t=prev; prev=cur; cur=t;
+  }
+  return prev[m]/(n+m);
+}
+
+function matchStatic(shape, nHands){
+  let best=null, bestD=Infinity;
+  for (const [label,g] of Object.entries(store.custom)){
+    if (g.type!=='static' || g.hands!==nHands) continue;
+    for (const s of g.samples){ const d=shapeDist(shape,s); if (d<bestD){bestD=d;best=label;} }
+  }
+  return {label:best, d:bestD};
+}
+function matchMotion(seq, nHands){
+  let best=null, bestD=Infinity;
+  for (const [label,g] of Object.entries(store.custom)){
+    if (g.type!=='motion' || g.hands!==nHands) continue;
+    for (const s of g.samples){ const d=dtw(seq,s); if (d<bestD){bestD=d;best=label;} }
+  }
+  return {label:best, d:bestD};
+}
+
+/* ───────────── үндсэн давталт ───────────── */
+let lastT=-1;
+let prevWrist=null, vel=0;                 // гарын хурд (гарын хэмжээгээр норм.)
+let capturing=false, buf=[], stillN=0, cooldown=0;
+let holdLabel=null, holdN=0, shown=null, gapN=0;
+let liveHold=0;
+const hist=[];
+
+let THR=0.32, HOLD=7, MTHR=0.35, V_START=0.13;
+const V_STOP = () => V_START*0.5;
+
+function resetAll(){
+  prevWrist=null; vel=0; capturing=false; buf=[]; stillN=0;
+  holdLabel=null; holdN=0; shown=null;
+  document.body.classList.remove('capturing');
+  $('meter').firstElementChild.style.width='0%';
+}
+
+function loop(){
+  if (!looping) return;
+  if (video.currentTime !== lastT){
+    lastT = video.currentTime;
+    handle(recognizer.recognizeForVideo(video, performance.now()));
+  }
+  requestAnimationFrame(loop);
+}
+
+function setLive(txt, force){
+  if (!force && performance.now() < liveHold) return;
+  $('live').textContent = txt;
+}
+
+function handle(res){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const hands = res.landmarks || [];
+
+  if ($('skel').checked){
+    for (const lm of hands){
+      draw.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, {color:'rgba(78,161,255,.85)', lineWidth:4});
+      draw.drawLandmarks(lm, {color:'#39d98a', lineWidth:1, radius:4});
+    }
+  }
+
+  /* гар алга болсон */
+  if (!hands.length){
+    if (capturing) endCapture();          // дуусаагүй хөдөлгөөнийг шалгана
+    prevWrist=null; vel=0;
+    $('meter').firstElementChild.style.width='0%';
+    if (++gapN>8){ holdLabel=null; holdN=0; shown=null; }
+    setLive('—'); mark(null);
+    return;
+  }
+  gapN=0;
+
+  const f = frameFeat(hands);
+
+  /* хурд: бугуй өмнөх кадраас хэр зөрсөн бэ (гарын хэмжээнд харьцуулсан) */
+  if (prevWrist && prevWrist.length===f.wrist.length){
+    let d=0;
+    for (let i=0;i<f.wrist.length;i+=2) d+=Math.hypot(f.wrist[i]-prevWrist[i], f.wrist[i+1]-prevWrist[i+1]);
+    d = d/(f.wrist.length/2)/f.scale;
+    vel = vel*0.6 + d*0.4;                // жигдрүүлэлт
+  } else vel = 0;
+  prevWrist = f.wrist.slice();
+  $('meter').firstElementChild.style.width = Math.min(100, vel/0.4*100) + '%';
+
+  if (recording){ capture(f); return; }
+
+  /* ── хөдөлгөөн бичих төлөвт шилжих / дуусгах ── */
+  if (hasMotion() && performance.now() > cooldown){
+    if (!capturing && vel > V_START){
+      capturing=true; buf=[f]; stillN=0;
+      document.body.classList.add('capturing');
+      setLive('хөдөлгөөн…', true); liveHold=0;
+    } else if (capturing){
+      if (f.hands !== buf[0].hands){ endCapture(); return; }   // гарын тоо өөрчлөгдвөл таслана
+      buf.push(f);
+      if (vel < V_STOP()){ if (++stillN >= STILL_N) { endCapture(); return; } }
+      else stillN = 0;
+      if (buf.length >= MAX_FRAMES){ endCapture(); return; }
+    }
+  }
+  if (capturing) return;    // хөдөлгөөний үед байрлал шалгахгүй
+
+  /* ── байрлалын танилт (гар харьцангуй зогсож байхад) ── */
+  const still = vel < V_STOP();
+  const hit = matchStatic(f.shape, f.hands);
+  let label=null, word=null, src=null;
+  if (hit.label && hit.d < THR){ label=hit.label; word=hit.label; src='custom'; }
+  if (!label && $('builtin').checked){
+    const gs = res.gestures || [];
+    const top = i => gs[i] && gs[i][0];
+    const g0 = top(0), g1 = top(1);
+    // хоёр алга зэрэг дэлгэсэн эсэх — нэг гарын дүрмээс ӨМНӨ шалгана
+    if (hands.length===2 && g0 && g1 &&
+        g0.categoryName==='Open_Palm' && g1.categoryName==='Open_Palm' &&
+        g0.score>0.55 && g1.score>0.55 && store.builtin.Open_Palm_2){
+      label='Open_Palm_2'; word=store.builtin.Open_Palm_2; src='builtin';
+    } else if (g0 && g0.categoryName!=='None' && g0.score>0.6 && store.builtin[g0.categoryName]){
+      label=g0.categoryName; word=store.builtin[g0.categoryName]; src='builtin';
+    }
+  }
+
+  setLive(label ? (src==='custom' ? word+' ('+hit.d.toFixed(2)+')' : word) : 'дохио алга');
+  mark(src==='custom' ? label : null);
+
+  if (!still){ holdLabel=null; holdN=0; return; }   // хөдөлж байвал үг гаргахгүй
+  if (label && label===holdLabel){
+    if (++holdN===HOLD && shown!==label){ show(word); shown=label; }
+  } else { holdLabel=label; holdN=0; if(!label) shown=null; }
+}
+
+/* хөдөлгөөн дууслаа — тааруулж үзнэ */
+function endCapture(){
+  capturing=false;
+  document.body.classList.remove('capturing');
+  const raw = buf; buf=[]; stillN=0;
+  cooldown = performance.now() + 350;
+  if (raw.length < MIN_FRAMES) return;
+
+  const seq = resample(buildSeq(trim(raw)));
+  const hit = matchMotion(seq, raw[0].hands);
+  if (hit.label && hit.d < MTHR){
+    show(hit.label);
+    shown = hit.label; holdLabel=null; holdN=0;
+    $('live').textContent = hit.label+' ('+hit.d.toFixed(2)+')';
+  } else {
+    $('live').textContent = isFinite(hit.d) ? 'таарсангүй ('+hit.d.toFixed(2)+')' : 'таарсангүй';
+  }
+  liveHold = performance.now() + 1600;
+}
+
+/* эхлэл төгсгөлийн зогсонги кадруудыг хасна */
+function trim(frames){
+  const v=[0];
+  for (let i=1;i<frames.length;i++){
+    let d=0; const a=frames[i].wrist, b=frames[i-1].wrist;
+    for (let k=0;k<a.length;k+=2) d+=Math.hypot(a[k]-b[k], a[k+1]-b[k+1]);
+    v.push(d/(a.length/2)/frames[i].scale);
+  }
+  const TH=V_START*0.45;
+  let s=0, e=frames.length-1;
+  while (s<e && v[s]<TH) s++;
+  while (e>s && v[e]<TH) e--;
+  s=Math.max(0,s-2); e=Math.min(frames.length-1,e+2);
+  const out=frames.slice(s,e+1);
+  return out.length>=MIN_FRAMES ? out : frames;
+}
+
+function show(word){
+  const t=$('capText');
+  t.textContent=word;
+  fitCaption();
+  t.classList.remove('pop'); void t.offsetWidth; t.classList.add('pop');
+  hist.push(word); if (hist.length>6) hist.shift();
+  $('history').textContent = hist.slice(0,-1).join(' · ');
+}
+
+/* Урт өгүүлбэр дэлгэцэнд багтахгүй бол үсгийн хэмжээг өөрөө багасгана */
+function fitCaption(){
+  const t=$('capText');
+  if (!t.textContent) return;
+  const base = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cap')) || 64;
+  const maxH = innerHeight*0.38;
+  let s = base, guard = 0;
+  t.style.fontSize = s+'px';
+  while (t.scrollHeight > maxH && s > 16 && guard++ < 60){
+    s -= 2; t.style.fontSize = s+'px';
+  }
+}
+
+/* ───────────── дохио заах ───────────── */
+let recording=false, recLabel='', recMode='static', recBuf=[], recHands=0, recEnd=0;
+
+const NOTE = {
+  static:'Гарах үгээ бичээд <b>Бичих</b> дар. 3 секунд тоолоод 2.6 секундын турш гараа хөдөлгөөнгүй барь — тэр байрлалыг тогтооно. Нэг үгэнд 2–3 удаа, бага зэрэг өөр өнцгөөс давтаж зааж өгвөл хамаагүй сайн танина.',
+  motion:'Гарах үгээ бичээд <b>Бичих</b> дар. 3 секунд тоолсны дараа хөдөлгөөнөө <b>нэг удаа бүтэн</b> хий (2.6 секундэд багтаа). Эхлэл төгсгөлийн зогсолтыг өөрөө хайчилна. Хурд яг таарах шаардлагагүй — удаан, хурдан хийсэн нь бүгд танигдана. 2–3 удаа давтаж заа.'
+};
+function setMode(m){
+  recMode=m;
+  $('mStatic').classList.toggle('on', m==='static');
+  $('mMotion').classList.toggle('on', m==='motion');
+  $('teachNote').innerHTML = NOTE[m];
+}
+$('mStatic').onclick = () => setMode('static');
+$('mMotion').onclick = () => setMode('motion');
+
+$('teach').onclick = () => {
+  const w=$('word').value.trim();
+  if (!w){ $('word').focus(); return; }
+  if (!stream){ alert('Эхлээд камераа асаана уу.'); return; }
+  const g = store.custom[w];
+  if (g && g.type !== recMode){
+    if (!confirm('«'+w+'» өмнө нь '+(g.type==='motion'?'хөдөлгөөн':'байрлал')+
+                 ' гэж хадгалагдсан байна. Дарж бичих үү?')) return;
+    delete store.custom[w];
+  }
+  recLabel=w; recBuf=[]; recHands=0;
+  countdown(3);
+};
+
+function countdown(n){
+  $('rec').classList.add('on');
+  $('recNum').textContent=n;
+  $('recTxt').textContent='«'+recLabel+'» — '+(recMode==='motion'?'хөдөлгөөнөө бэлд':'дохиогоо бэлд');
+  $('recBar').firstElementChild.style.width='0%';
+  if (n>0){ setTimeout(()=>countdown(n-1), 900); return; }
+  $('recNum').textContent = recMode==='motion' ? '🌀' : '●';
+  $('recTxt').textContent = recMode==='motion' ? 'Хөдөлгөөнөө хий…' : 'Бариад бай…';
+  recording=true; recEnd=performance.now()+REC_MS;
+}
+
+function capture(f){
+  const left = recEnd - performance.now();
+  $('recBar').firstElementChild.style.width = Math.min(100,(1-left/REC_MS)*100)+'%';
+  if (!recHands) recHands = f.hands;
+  if (f.hands === recHands && recBuf.length < MAX_FRAMES) recBuf.push(f);
+  if (left <= 0) finish();
+}
+
+function finish(){
+  recording=false;
+  $('rec').classList.remove('on');
+  if (recBuf.length < (recMode==='motion' ? MIN_FRAMES+4 : 5)){
+    alert('Гар хангалттай харагдсангүй. Дахин оролдоно уу.'); return;
+  }
+  const g = store.custom[recLabel];
+  if (recMode==='motion'){
+    const seq = packSeq(resample(buildSeq(trim(recBuf))));
+    if (g && g.hands===recHands){ g.samples.push(seq); g.samples = g.samples.slice(-MAX_SAMPLES_M); }
+    else store.custom[recLabel] = { type:'motion', hands:recHands, samples:[seq] };
+  } else {
+    const shapes = recBuf.map(f=>round3(f.shape));
+    if (g && g.hands===recHands){ g.samples = g.samples.concat(shapes).slice(-MAX_SAMPLES_S); }
+    else store.custom[recLabel] = { type:'static', hands:recHands, samples:shapes };
+  }
+  save(); renderList(); resetAll();
+  $('word').value='';
+}
+
+/* ───────────── жагсаалт / тохиргоо ───────────── */
+let hotLabel=null;
+function mark(label){
+  if (label===hotLabel) return;
+  hotLabel=label;
+  for (const el of document.querySelectorAll('#list .item'))
+    el.classList.toggle('hot', el.dataset.k===label);
+}
+function renderList(){
+  const box=$('list'); box.innerHTML='';
+  const keys=Object.keys(store.custom);
+  $('empty').style.display = keys.length ? 'none':'block';
+  for (const k of keys){
+    const g=store.custom[k], m = g.type==='motion';
+    const el=document.createElement('div');
+    el.className='item'; el.dataset.k=k;
+    el.innerHTML = '<span class="tag'+(m?' m':'')+'">'+(m?'🌀':'✋')+'</span>'+
+                   '<span class="w"></span><span class="n">'+g.samples.length+'×'+
+                   ' · '+g.hands+' гар</span><button class="x" title="Устгах">×</button>';
+    el.querySelector('.w').textContent=k;
+    el.querySelector('.x').onclick=()=>{
+      if (confirm('«'+k+'» дохиог устгах уу?')){ delete store.custom[k]; save(); renderList(); }
+    };
+    box.appendChild(el);
+  }
+}
+function renderBuiltin(){
+  const box=$('bmap'); box.innerHTML='';
+  for (const k of Object.keys(BUILTIN_DEFAULT)){
+    const el=document.createElement('div'); el.className='item';
+    el.innerHTML='<span class="n" style="min-width:104px">'+(BUILTIN_NAME[k]||k)+'</span>';
+    const inp=document.createElement('input');
+    inp.type='text'; inp.value=store.builtin[k]||'';
+    inp.style.cssText='flex:1;min-width:0;font-size:13px;padding:5px 7px';
+    inp.oninput=()=>{ store.builtin[k]=inp.value; save(); };
+    el.appendChild(inp); box.appendChild(el);
+  }
+}
+
+$('thr').oninput    = e => { THR=e.target.value/100; $('thrV').textContent=THR.toFixed(2).slice(1); };
+$('hold').oninput   = e => { HOLD=+e.target.value; $('holdV').textContent=HOLD; };
+$('mthr').oninput   = e => { MTHR=e.target.value/100; $('mthrV').textContent=MTHR.toFixed(2).slice(1); };
+$('vstart').oninput = e => { V_START=e.target.value/100; $('vstartV').textContent=V_START.toFixed(2).slice(1); };
+$('size').oninput   = e => { document.documentElement.style.setProperty('--cap',e.target.value+'px');
+                             $('sizeV').textContent=e.target.value; fitCaption(); };
+$('mirror').onchange = e => $('view').classList.toggle('mirror', e.target.checked);
+$('toggle').onclick = () => {
+  const hid = $('panel').classList.toggle('hidden');
+  document.documentElement.style.setProperty('--panelw', hid ? '0px' : '340px');
+  fit();
+};
+$('clear').onclick  = () => { $('capText').textContent=''; $('history').textContent=''; hist.length=0; shown=null; };
+$('full').onclick   = () => document.fullscreenElement ? document.exitFullscreen()
+                                                       : document.documentElement.requestFullscreen();
+
+$('exp').onclick = () => {
+  const blob=new Blob([JSON.stringify(store,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='dohio-tokhirgoo.json'; a.click();
+};
+$('imp').onclick = () => $('impFile').click();
+$('impFile').onchange = async e => {
+  const f=e.target.files[0]; if(!f) return;
+  try{
+    const s=JSON.parse(await f.text());
+    store={ custom:s.custom||{}, builtin:{...BUILTIN_DEFAULT, ...(s.builtin||{})} };
+    for (const g of Object.values(store.custom)) if (!g.type) g.type='static';
+    save(); renderList(); renderBuiltin();
+  } catch(_){ alert('Файлыг уншиж чадсангүй.'); }
+};
+
+document.addEventListener('keydown', e=>{
+  if (/^(INPUT|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key.toLowerCase()==='f') $('full').click();
+  if (e.key.toLowerCase()==='c') $('clear').click();
+  if (e.key.toLowerCase()==='h') $('toggle').click();
+});
+
+/* баруун самбарыг дээд самбарын доор эхлүүлнэ (самбар хэдэн мөр болсон ч) */
+const fitPanel = () => $('panel').style.top = $('bar').offsetHeight + 'px';
+
+/* Видеоны хайрцгийн хэмжээг тооцно: дүрсний харьцааг хадгалж, самбарын
+   эзлэхүүнийг хасаад, үлдсэн зайд бүтнээр нь багтаана. */
+function fitView(){
+  const vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  const pw = $('panel').classList.contains('hidden') ? 0 : $('panel').offsetWidth;
+  const availW = Math.max(120, innerWidth - pw), availH = Math.max(90, innerHeight);
+  const s = Math.min(availW/vw, availH/vh);
+  const el = $('view');
+  el.style.width  = Math.round(vw*s) + 'px';
+  el.style.height = Math.round(vh*s) + 'px';
+  el.style.marginRight = pw + 'px';   // самбарын зайд төвлөрүүлэх
+}
+const fit = () => { fitPanel(); fitView(); fitCaption(); };
+addEventListener('resize', fit);
+video.addEventListener('loadedmetadata', fit);
+fit();
+
+let idle; const wake=()=>{ document.body.classList.remove('idle');
+  clearTimeout(idle);
+  idle=setTimeout(()=>{ if (stream) document.body.classList.add('idle'); },3500); };
+document.addEventListener('mousemove',wake); document.addEventListener('keydown',wake); wake();
+
+setMode('static'); renderList(); renderBuiltin();
+
+// шалгах/тохируулахад хэрэгтэй дотоод функцууд
+window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption };
+</script>
+</body>
+</html>
