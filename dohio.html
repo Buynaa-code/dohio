@@ -47,6 +47,43 @@
     text-shadow:0 2px 8px #000;pointer-events:none;
   }
 
+  /* ---- горим сонгох ---- */
+  .modes{display:inline-flex;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .mode{border:0;border-radius:0;background:#26262e;padding:8px 12px;font-size:14px}
+  .mode + .mode{border-left:1px solid var(--line)}
+  .mode.on{background:var(--accent);color:#03101f;font-weight:700}
+  .mode.on:hover{background:#6fb4ff}
+
+  /* ---- филтерийн хүрд ---- */
+  #wheel{position:fixed;z-index:8;display:none;pointer-events:none;
+         background:radial-gradient(ellipse at center,rgba(4,6,12,.30),rgba(4,6,12,.72))}
+  #wheel.on{display:block}
+  #wheelCards{position:absolute;inset:0}
+  .fcard{
+    position:absolute;left:50%;top:50%;width:var(--fw,158px);
+    background:rgba(16,18,26,.82);border:1px solid rgba(255,255,255,.14);
+    border-radius:14px;padding:6px 6px 7px;pointer-events:auto;cursor:pointer;
+    box-shadow:0 12px 40px rgba(0,0,0,.55);
+    transform:translate(-50%,-50%) scale(.12) rotate(-230deg);opacity:0;
+    transition:transform .6s cubic-bezier(.18,.92,.24,1), opacity .35s, border-color .2s, box-shadow .2s;
+  }
+  .fcard canvas{display:block;width:100%;height:auto;border-radius:9px;background:#000}
+  .fname{font-size:13px;font-weight:600;text-align:center;margin-top:5px;color:#e8eaf0}
+  .fbar{height:4px;margin-top:5px;border-radius:99px;background:rgba(255,255,255,.14);overflow:hidden}
+  .fbar i{display:block;height:100%;width:0;background:var(--ok);transition:width .08s linear}
+  .fcard.hot{border-color:var(--ok);box-shadow:0 0 0 2px rgba(57,217,138,.5),0 18px 50px rgba(0,0,0,.6)}
+  .fcard.cur .fname::after{content:' ✓';color:var(--ok)}
+  .fcard.taken{border-color:var(--ok);background:rgba(22,46,36,.9)}
+  #wheelHint{
+    position:absolute;left:0;right:0;bottom:18px;text-align:center;
+    font-size:15px;font-weight:600;color:rgba(255,255,255,.72);text-shadow:0 2px 10px #000;
+  }
+  /* гарын заагч */
+  #ptr{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;
+       background:radial-gradient(circle,rgba(235,250,255,.95),rgba(78,161,255,.15) 70%,transparent);
+       box-shadow:0 0 22px rgba(120,200,255,.8);display:none}
+  #ptr.on{display:block}
+
   /* ---- анхааруулга ---- */
   #warn{position:fixed;left:14px;bottom:14px;z-index:7;max-width:min(520px,60vw);
         font-size:13px;line-height:1.5;color:var(--fg);
@@ -171,8 +208,12 @@
   <span class="pill move">Хөдөлгөөн <span id="meter"><i></i></span></span>
   <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
   <label class="chk"><input type="checkbox" id="skel"> Гарын зураас</label>
+  <span class="modes">
+    <button class="mode" data-m="text">📝 Текст</button>
+    <button class="mode" data-m="zap">⚡ Цахилгаан</button>
+    <button class="mode on" data-m="both">Хоёулаа</button>
+  </span>
   <label class="chk"><input type="checkbox" id="builtin" checked> Бэлэн дохио</label>
-  <label class="chk"><input type="checkbox" id="zap" checked> ⚡ Цахилгаан</label>
   <span class="sep"></span>
   <button id="clear">Цэвэрлэх</button>
   <button id="full">⛶ Бүтэн дэлгэц</button>
@@ -232,6 +273,12 @@
   </section>
 </div>
 
+<div id="wheel">
+  <div id="wheelCards"></div>
+  <div id="ptr"></div>
+  <div id="wheelHint"></div>
+</div>
+
 <div id="rec"><div id="recBox">
   <div id="recNum">3</div>
   <div id="recTxt"></div>
@@ -248,7 +295,8 @@
 import { FilesetResolver, GestureRecognizer, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const VER = 'v7';
+const VER = 'v8';
+let MODE = 'both';        // 'text' | 'zap' | 'both'
 const $ = id => document.getElementById(id);
 const video = $('cam'), canvas = $('fx'), ctx = canvas.getContext('2d');
 
@@ -627,7 +675,7 @@ function orb(P, r, p){
 }
 
 function drawZap(hands){
-  if (!$('zap').checked || hands.length !== 2){ zapPower = 0; return; }
+  if (MODE === 'text' || hands.length !== 2){ zapPower = 0; return; }
   const W=canvas.width, H=canvas.height, K=W/1280;   // дэлгэцийн хэмжээнд зохицуулах
   const a=palmCenter(hands[0]), b=palmCenter(hands[1]);
   const span=(handSpan(hands[0])+handSpan(hands[1]))/2;
@@ -669,6 +717,163 @@ function drawZap(hands){
     ctx.fill();
   }
   ctx.restore();
+}
+
+/* ───────────── 🎞 филтерийн хүрд ─────────────
+   Хоёр гараа буулгахад филтерүүд төвөөс эргэлдэн гарч ирнэ. Дараа нь нэг
+   гараа өргөж хүссэн хөзрөө заахад тэр нь сонгогдоно (0.9 сек барина). */
+const FILTERS = [
+  { name:'Хэвийн',       css:'none' },
+  { name:'Хар цагаан',   css:'grayscale(1) contrast(1.1)' },
+  { name:'Сепиа',        css:'sepia(.85) contrast(1.05)' },
+  { name:'Тод өнгө',     css:'saturate(1.9) contrast(1.15)' },
+  { name:'Хүйтэн',       css:'hue-rotate(170deg) saturate(1.3)' },
+  { name:'Дулаан',       css:'sepia(.45) saturate(1.7) hue-rotate(-12deg)' },
+  { name:'Неон',         css:'contrast(1.7) saturate(2.4) hue-rotate(295deg)' },
+  { name:'Хуучин кино',  css:'sepia(.7) contrast(1.35) brightness(.95) saturate(.85)' },
+  { name:'Негатив',      css:'invert(1)' }
+];
+const DWELL = 900;                  // хэдэн мс барихад сонгогдох вэ
+let wheelOpen=false, wheelCooldown=0, curFilter=0;
+let armed=false, lastY=0, lastSeen=0;
+let hotCard=-1, hotSince=0, thumbT=0;
+const cards=[];
+
+function buildCards(){
+  const box=$('wheelCards'); box.innerHTML=''; cards.length=0;
+  FILTERS.forEach((f,i)=>{
+    const el=document.createElement('div');
+    el.className='fcard';
+    el.innerHTML='<canvas width="192" height="108"></canvas>'+
+                 '<div class="fname"></div><div class="fbar"><i></i></div>';
+    el.querySelector('.fname').textContent=f.name;
+    el.onclick=()=>pickFilter(i);       // хулганаар ч сонгож болно
+    box.appendChild(el);
+    cards.push(el);
+  });
+}
+
+function layoutWheel(){
+  const W=$('wheel').clientWidth, H=$('wheel').clientHeight;
+  const cw=Math.max(104, Math.min(172, W*0.13));
+  const R=Math.min(W,H)*0.34;
+  $('wheel').style.setProperty('--fw', cw+'px');
+  cards.forEach((el,i)=>{
+    const a=-Math.PI/2 + i*2*Math.PI/FILTERS.length;   // дээрээс эхэлнэ
+    el._x = W/2 + Math.cos(a)*R;
+    el._y = H/2 + Math.sin(a)*R*0.86;                  // бага зэрэг зууван
+  });
+}
+
+function openWheel(){
+  wheelOpen=true; hotCard=-1;
+  const w=$('wheel');
+  w.classList.add('on');
+  layoutWheel();
+  $('wheelHint').textContent='Нэг гараа өргөөд хүссэн филтер рүүгээ заа';
+  cards.forEach((el,i)=>{
+    el.classList.remove('hot','taken');
+    el.classList.toggle('cur', i===curFilter);
+    el.querySelector('.fbar i').style.width='0%';
+    el.style.transition='none';
+    el.style.transform='translate(-50%,-50%) scale(.12) rotate(-230deg)';
+    el.style.opacity='0';
+    el.style.left=(el._x)+'px'; el.style.top=(el._y)+'px';
+    setTimeout(()=>{
+      el.style.transition='';
+      el.style.transform='translate(-50%,-50%) scale(1) rotate(0deg)';
+      el.style.opacity='1';
+    }, 40 + i*45);
+  });
+  drawThumbs();
+}
+
+function closeWheel(){
+  if (!wheelOpen) return;
+  wheelOpen=false; hotCard=-1;
+  $('wheel').classList.remove('on');
+  $('ptr').classList.remove('on');
+  wheelCooldown = performance.now() + 1200;
+  armed = false;
+}
+
+function pickFilter(i){
+  curFilter=i;
+  video.style.filter = FILTERS[i].css;
+  cards.forEach((el,k)=>el.classList.toggle('cur', k===i));
+  cards[i].classList.add('taken');
+  $('wheelHint').textContent = FILTERS[i].name + ' — сонгогдлоо';
+  setTimeout(closeWheel, 420);
+}
+
+/* хөзрүүд дээрх амьд урьдчилан харах */
+function drawThumbs(){
+  if (!stream || !video.videoWidth) return;
+  cards.forEach((el,i)=>{
+    const c=el.querySelector('canvas'), x=c.getContext('2d');
+    x.save();
+    x.filter = FILTERS[i].css;
+    x.translate(c.width,0); x.scale(-1,1);            // толин дүрс
+    x.drawImage(video, 0,0, c.width, c.height);
+    x.restore();
+  });
+}
+
+/* гарын байрлалаар заах + барих хугацаагаар сонгох */
+function updateWheel(hands){
+  const now=performance.now();
+  if (now - thumbT > 380){ thumbT=now; drawThumbs(); }
+
+  if (!hands.length){
+    $('ptr').classList.remove('on');
+    if (!lastSeen) lastSeen=now;
+    if (now - lastSeen > 4000) closeWheel();          // гар алга бол өөрөө хаагдана
+    hotCard=-1; cards.forEach(el=>el.classList.remove('hot'));
+    return;
+  }
+  lastSeen=now;
+
+  const W=$('wheel').clientWidth, H=$('wheel').clientHeight;
+  const p=palmCenter(hands[0]);
+  const px=($('view').classList.contains('mirror') ? 1-p.x : p.x)*W, py=p.y*H;
+  const ptr=$('ptr');
+  ptr.classList.add('on'); ptr.style.left=px+'px'; ptr.style.top=py+'px';
+
+  // хамгийн ойрын хөзөр
+  let best=-1, bestD=Infinity;
+  cards.forEach((el,i)=>{
+    const d=Math.hypot(px-el._x, py-el._y);
+    if (d<bestD){ bestD=d; best=i; }
+  });
+  const reach=Math.min(W,H)*0.17;
+  if (bestD > reach) best=-1;
+
+  if (best!==hotCard){
+    hotCard=best; hotSince=now;
+    cards.forEach((el,i)=>{
+      el.classList.toggle('hot', i===best);
+      if (i!==best) el.querySelector('.fbar i').style.width='0%';
+    });
+  } else if (best>=0){
+    const pct=Math.min(100,(now-hotSince)/DWELL*100);
+    cards[best].querySelector('.fbar i').style.width=pct+'%';
+    if (pct>=100) pickFilter(best);
+  }
+}
+
+/* «хоёр гараа буулгах» хөдөлгөөнийг ажиглана */
+function wheelTrigger(hands){
+  const now=performance.now();
+  if (wheelOpen || now < wheelCooldown || !stream) return;
+
+  if (hands.length===2){
+    const y=(palmCenter(hands[0]).y + palmCenter(hands[1]).y)/2;
+    if (y < 0.50) armed=true;                       // гараа өргөв
+    else if (armed && y > 0.68){ openWheel(); return; }
+    lastY=y; lastSeen=now;
+  } else if (armed && lastSeen && now-lastSeen < 500 && lastY > 0.50){
+    openWheel();                                    // доош чиглээд кадраас гарлаа
+  }
 }
 
 /* ───────────── үндсэн давталт ───────────── */
@@ -714,7 +919,11 @@ function handle(res){
     }
   }
 
-  drawZap(hands);
+  if (!wheelOpen) drawZap(hands);
+
+  /* филтерийн хүрд нээлттэй бол бусад бүхнийг зогсооно */
+  if (wheelOpen){ updateWheel(hands); return; }
+  wheelTrigger(hands);
 
   /* гар алга болсон */
   if (!hands.length){
@@ -740,6 +949,9 @@ function handle(res){
   $('meter').firstElementChild.style.width = Math.min(100, vel/0.4*100) + '%';
 
   if (recording){ capture(f); return; }
+
+  /* зөвхөн цахилгааны горимд текст таних хэсгийг алгасна */
+  if (MODE === 'zap'){ setLive(hands.length===2 ? '⚡' : '—'); return; }
 
   /* ── хөдөлгөөн бичих төлөвт шилжих / дуусгах ── */
   if (hasMotion() && performance.now() > cooldown){
@@ -958,6 +1170,15 @@ $('mthr').oninput   = e => { MTHR=e.target.value/100; $('mthrV').textContent=MTH
 $('vstart').oninput = e => { V_START=e.target.value/100; $('vstartV').textContent=V_START.toFixed(2).slice(1); };
 $('size').oninput   = e => { document.documentElement.style.setProperty('--cap',e.target.value+'px');
                              $('sizeV').textContent=e.target.value; fitCaption(); };
+/* горим солих */
+function setMainMode(m){
+  MODE = m;
+  for (const b of document.querySelectorAll('.mode')) b.classList.toggle('on', b.dataset.m===m);
+  if (m==='zap'){ $('capText').textContent=''; $('history').textContent=''; hist.length=0; shown=null; }
+  if (m==='text') zapPower = 0;
+}
+for (const b of document.querySelectorAll('.mode')) b.onclick = () => setMainMode(b.dataset.m);
+
 $('mirror').onchange = e => $('view').classList.toggle('mirror', e.target.checked);
 $('toggle').onclick = () => {
   const hid = $('panel').classList.toggle('hidden');
@@ -986,9 +1207,14 @@ $('impFile').onchange = async e => {
 
 document.addEventListener('keydown', e=>{
   if (/^(INPUT|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key==='Escape') closeWheel();
   if (e.key.toLowerCase()==='f') $('full').click();
   if (e.key.toLowerCase()==='c') $('clear').click();
   if (e.key.toLowerCase()==='h') $('toggle').click();
+  if (e.key==='1') setMainMode('text');
+  if (e.key==='2') setMainMode('zap');
+  if (e.key==='3') setMainMode('both');
+  if (e.key.toLowerCase()==='w' && stream) wheelOpen ? closeWheel() : openWheel();
 });
 
 /* баруун самбарыг дээд самбарын доор эхлүүлнэ (самбар хэдэн мөр болсон ч) */
@@ -1005,6 +1231,12 @@ function fitView(){
   el.style.width  = Math.round(vw*s) + 'px';
   el.style.height = Math.round(vh*s) + 'px';
   el.style.marginRight = pw + 'px';   // самбарын зайд төвлөрүүлэх
+
+  // филтерийн хүрдийг яг видеоны дээр тавина
+  const r = el.getBoundingClientRect(), w = $('wheel');
+  w.style.left=r.left+'px'; w.style.top=r.top+'px';
+  w.style.width=r.width+'px'; w.style.height=r.height+'px';
+  if (cards.length) layoutWheel();
 }
 const fit = () => { fitPanel(); fitView(); fitCaption(); };
 addEventListener('resize', fit);
@@ -1016,10 +1248,10 @@ let idle; const wake=()=>{ document.body.classList.remove('idle');
   idle=setTimeout(()=>{ if (stream) document.body.classList.add('idle'); },3500); };
 document.addEventListener('mousemove',wake); document.addEventListener('keydown',wake); wake();
 
-setMode('static'); renderList(); renderBuiltin();
+setMode('static'); renderList(); renderBuiltin(); buildCards(); fit();
 
 // шалгах/тохируулахад хэрэгтэй дотоод функцууд
-window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption, drawZap };
+window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption, drawZap, openWheel, closeWheel, updateWheel, FILTERS };
 </script>
 </body>
 </html>
