@@ -170,7 +170,7 @@
   <span class="pill">Танилт: <b id="live">—</b></span>
   <span class="pill move">Хөдөлгөөн <span id="meter"><i></i></span></span>
   <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
-  <label class="chk"><input type="checkbox" id="skel" checked> Гарын зураас</label>
+  <label class="chk"><input type="checkbox" id="skel"> Гарын зураас</label>
   <label class="chk"><input type="checkbox" id="builtin" checked> Бэлэн дохио</label>
   <label class="chk"><input type="checkbox" id="zap" checked> ⚡ Цахилгаан</label>
   <span class="sep"></span>
@@ -248,7 +248,7 @@
 import { FilesetResolver, GestureRecognizer, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const VER = 'v6';
+const VER = 'v7';
 const $ = id => document.getElementById(id);
 const video = $('cam'), canvas = $('fx'), ctx = canvas.getContext('2d');
 
