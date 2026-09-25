@@ -205,6 +205,7 @@
   <select id="camSel" title="Аль камерыг ашиглах вэ" style="display:none;max-width:200px"></select>
   <span class="pill" id="camInfo" style="display:none"></span>
   <span class="pill">Танилт: <b id="live">—</b></span>
+  <span class="pill" id="trig" title="Хоёр алганы босоо байрлал · ↓ доош хөдөлж буй · ✓ хүрд гарахад бэлэн">y —</span>
   <span class="pill move">Хөдөлгөөн <span id="meter"><i></i></span></span>
   <label class="chk"><input type="checkbox" id="mirror" checked> Толин дүрс</label>
   <label class="chk"><input type="checkbox" id="skel"> Гарын зураас</label>
@@ -262,6 +263,14 @@
   </section>
 
   <section>
+    <h3>Филтерийн хүрд</h3>
+    <div class="slider">Буулгах<input type="range" id="dropy" min="45" max="85" value="62"><b id="dropyV">.62</b></div>
+    <p class="note">Гар хэр доошлоход хүрд гарах вэ. Дээд самбарын <b>y</b> тоог хараад
+      тааруул: гараа буулгасан үед гарч байгаа тооноос <b>арай бага</b> утга тавь.
+      ✓ тэмдэг нь «гараа өргөсөн, одоо буулгахад гарна» гэсэн үг.</p>
+  </section>
+
+  <section>
     <h3>Бэлэн дохионы үг</h3>
     <div id="bmap"></div>
     <p class="note">Загварт агуулагдсан 7 энгийн байрлал. Үгийг нь дарж өөрчилж болно.</p>
@@ -295,7 +304,7 @@
 import { FilesetResolver, GestureRecognizer, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const VER = 'v8';
+const VER = 'v9';
 let MODE = 'both';        // 'text' | 'zap' | 'both'
 const $ = id => document.getElementById(id);
 const video = $('cam'), canvas = $('fx'), ctx = canvas.getContext('2d');
@@ -861,19 +870,39 @@ function updateWheel(hands){
   }
 }
 
-/* «хоёр гараа буулгах» хөдөлгөөнийг ажиглана */
+/* «хоёр гараа буулгах» хөдөлгөөнийг ажиглана.
+   Зөвхөн байрлалаар шүүхэд гар кадраас хурдан гардаг тул алддаг байсан —
+   иймд доош чиглэсэн ХУРДЫГ нь мөн тооцно. */
+let prevMeanY=null, vy=0;
+let DROP_Y = 0.62;
+
 function wheelTrigger(hands){
   const now=performance.now();
-  if (wheelOpen || now < wheelCooldown || !stream) return;
 
+  /* төлөвөө шинэчлэх (хүрд нээлттэй эсэхээс үл хамаарна) */
   if (hands.length===2){
     const y=(palmCenter(hands[0]).y + palmCenter(hands[1]).y)/2;
-    if (y < 0.50) armed=true;                       // гараа өргөв
-    else if (armed && y > 0.68){ openWheel(); return; }
-    lastY=y; lastSeen=now;
-  } else if (armed && lastSeen && now-lastSeen < 500 && lastY > 0.50){
-    openWheel();                                    // доош чиглээд кадраас гарлаа
+    vy = prevMeanY===null ? 0 : vy*0.55 + (y-prevMeanY)*0.45;   // эерэг = доошоо
+    prevMeanY=y; lastY=y; lastSeen=now;
+    if (y < 0.55) armed=true;                                   // гараа өргөв
+    $('trig').textContent = 'y '+y.toFixed(2) +
+      (vy>0.004?' ↓':vy<-0.004?' ↑':'') + (armed?' ✓':'');
+  } else {
+    prevMeanY=null;
+    if (!hands.length) $('trig').textContent = armed ? 'y — ✓' : 'y —';
   }
+
+  if (wheelOpen || now < wheelCooldown || !armed) return;
+
+  /* Хоёр дүрэм хоёулаа гулсуурын утгад захирагдана:
+     байрлалаар нь (удаан буулгах) эсвэл доош чиглэсэн эрчээр нь (хурдан буулгах). */
+  const dropped =
+    (hands.length===2 && lastY > DROP_Y) ||                        // кадр дотроо доошилсон
+    (hands.length===2 && vy > 0.010 && lastY > DROP_Y-0.20) ||     // доош эрчтэй хөдөлсөн
+    (hands.length < 2 && now-lastSeen < 600 &&                     // доош чиглээд кадраас гарсан
+     (vy > 0.005 || lastY > DROP_Y-0.14));
+
+  if (dropped){ openWheel(); armed=false; vy=0; prevMeanY=null; }
 }
 
 /* ───────────── үндсэн давталт ───────────── */
@@ -1166,6 +1195,7 @@ function renderBuiltin(){
 
 $('thr').oninput    = e => { THR=e.target.value/100; $('thrV').textContent=THR.toFixed(2).slice(1); };
 $('hold').oninput   = e => { HOLD=+e.target.value; $('holdV').textContent=HOLD; };
+$('dropy').oninput  = e => { DROP_Y=e.target.value/100; $('dropyV').textContent=DROP_Y.toFixed(2).slice(1); };
 $('mthr').oninput   = e => { MTHR=e.target.value/100; $('mthrV').textContent=MTHR.toFixed(2).slice(1); };
 $('vstart').oninput = e => { V_START=e.target.value/100; $('vstartV').textContent=V_START.toFixed(2).slice(1); };
 $('size').oninput   = e => { document.documentElement.style.setProperty('--cap',e.target.value+'px');
@@ -1251,7 +1281,7 @@ document.addEventListener('mousemove',wake); document.addEventListener('keydown'
 setMode('static'); renderList(); renderBuiltin(); buildCards(); fit();
 
 // шалгах/тохируулахад хэрэгтэй дотоод функцууд
-window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption, drawZap, openWheel, closeWheel, updateWheel, FILTERS };
+window.__dohio = { frameFeat, buildSeq, resample, trim, dtw, matchMotion, matchStatic, store, show, fitCaption, drawZap, openWheel, closeWheel, updateWheel, wheelTrigger, FILTERS };
 </script>
 </body>
 </html>
